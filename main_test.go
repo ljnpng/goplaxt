@@ -11,7 +11,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/xanderstrike/goplaxt/lib/store"
+	"goplaxt/lib/store"
 )
 
 func TestSelfRoot(t *testing.T) {

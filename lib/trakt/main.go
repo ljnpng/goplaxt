@@ -10,9 +10,9 @@ import (
 	"net/url"
 	"regexp"
 
-	"github.com/xanderstrike/goplaxt/lib/config"
-	"github.com/xanderstrike/goplaxt/lib/store"
-	"github.com/xanderstrike/plexhooks"
+	"goplaxt/lib/config"
+	"goplaxt/lib/plexhooks"
+	"goplaxt/lib/store"
 )
 
 // AuthRequest authorize the connection with Trakt
