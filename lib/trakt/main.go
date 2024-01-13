@@ -72,14 +72,29 @@ func HandleShow(pr plexhooks.PlexResponse, accessToken string) {
 func HandleMovie(pr plexhooks.PlexResponse, accessToken string) {
 	event, progress := getAction(pr)
 
-	scrobbleObject := MovieScrobbleBody{
-		Progress: progress,
-		Movie:    findMovie(pr),
+	if event == "rating" {
+		movie := findMovie(pr)
+		ratingObject := MovieRates{
+			MovieRateBody: []MovieRateBody{{
+				Rating: pr.Rating,
+				Title:  movie.Title,
+				Year:   movie.Year,
+				Ids:    movie.Ids,
+			},
+			},
+		}
+		ratingObjectJSON, _ := json.Marshal(ratingObject)
+		rateRequest("rating", ratingObjectJSON, accessToken)
+	} else {
+		scrobbleObject := MovieScrobbleBody{
+			Progress: progress,
+			Movie:    findMovie(pr),
+		}
+
+		scrobbleJSON, _ := json.Marshal(scrobbleObject)
+
+		scrobbleRequest(event, scrobbleJSON, accessToken)
 	}
-
-	scrobbleJSON, _ := json.Marshal(scrobbleObject)
-
-	scrobbleRequest(event, scrobbleJSON, accessToken)
 }
 
 func findEpisode(pr plexhooks.PlexResponse) Episode {
@@ -188,6 +203,27 @@ func makeRequest(url string) []byte {
 	return respBody
 }
 
+func rateRequest(action string, body []byte, accessToken string) []byte {
+	client := &http.Client{}
+
+	url := "https://api.trakt.tv/sync/ratings"
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(body))
+	handleErr(err)
+
+	req.Header.Add("Content-Type", "application/json")
+	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Add("trakt-api-version", "2")
+	req.Header.Add("trakt-api-key", config.TraktClientId)
+
+	resp, _ := client.Do(req)
+	defer resp.Body.Close()
+
+	respBody, _ := ioutil.ReadAll(resp.Body)
+
+	return respBody
+}
+
 func scrobbleRequest(action string, body []byte, accessToken string) []byte {
 	client := &http.Client{}
 
@@ -221,6 +257,8 @@ func getAction(pr plexhooks.PlexResponse) (string, int) {
 		return "stop", 0
 	case "media.scrobble":
 		return "stop", 90
+	case "media.rate":
+		return "rating", 0
 	}
 	return "", 0
 }

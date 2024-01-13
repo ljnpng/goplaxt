@@ -59,3 +59,14 @@ type MovieScrobbleBody struct {
 	Movie    Movie `json:"movie"`
 	Progress int   `json:"progress"`
 }
+
+type MovieRateBody struct {
+	Rating float32 `json:"rating"`
+	Title  string  `json:"title"`
+	Year   int     `json:"year"`
+	Ids    Ids     `json:"ids"`
+}
+
+type MovieRates struct {
+	MovieRateBody []MovieRateBody `json:"movies"`
+}
