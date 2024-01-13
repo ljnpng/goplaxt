@@ -1,270 +1,334 @@
 package trakt
 
 import (
-    "bytes"
-    "encoding/json"
-    "fmt"
-    "io/ioutil"
-    "log"
-    "net/http"
-    "net/url"
-    "regexp"
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io/ioutil"
+	"log"
+	"net/http"
+	"net/url"
+	"regexp"
 
-    "goplaxt/lib/config"
-    "goplaxt/lib/plexhooks"
-    "goplaxt/lib/store"
+	"goplaxt/lib/config"
+	"goplaxt/lib/plexhooks"
+	"goplaxt/lib/store"
 )
 
 // AuthRequest authorize the connection with Trakt
 func AuthRequest(root, username, code, refreshToken, grantType string) (map[string]interface{}, bool) {
-    values := map[string]string{
-        "code":          code,
-        "refresh_token": refreshToken,
-        "client_id":     config.TraktClientId,
-        "client_secret": config.TraktClientSecret,
-        "redirect_uri":  fmt.Sprintf("%s/authorize?username=%s", root, url.PathEscape(username)),
-        "grant_type":    grantType,
-    }
-    jsonValue, _ := json.Marshal(values)
+	values := map[string]string{
+		"code":          code,
+		"refresh_token": refreshToken,
+		"client_id":     config.TraktClientId,
+		"client_secret": config.TraktClientSecret,
+		"redirect_uri":  fmt.Sprintf("%s/authorize?username=%s", root, url.PathEscape(username)),
+		"grant_type":    grantType,
+	}
+	jsonValue, _ := json.Marshal(values)
 
-    resp, err := http.Post("https://api.trakt.tv/oauth/token", "application/json", bytes.NewBuffer(jsonValue))
-    handleErr(err)
+	resp, err := http.Post("https://api.trakt.tv/oauth/token", "application/json", bytes.NewBuffer(jsonValue))
+	handleErr(err)
 
-    var result map[string]interface{}
+	var result map[string]interface{}
 
-    if resp.Status != "200 OK" {
-        log.Println(fmt.Sprintf("Got a %s error while refreshing :(", resp.Status))
-        return result, false
-    }
+	if resp.Status != "200 OK" {
+		log.Println(fmt.Sprintf("Got a %s error while refreshing :(", resp.Status))
+		return result, false
+	}
 
-    err = json.NewDecoder(resp.Body).Decode(&result)
-    handleErr(err)
+	err = json.NewDecoder(resp.Body).Decode(&result)
+	handleErr(err)
 
-    return result, true
+	return result, true
 }
 
 // Handle determine if an item is a show or a movie
 func Handle(pr plexhooks.PlexResponse, user store.User) {
-    if pr.Metadata.LibrarySectionType == "show" {
-        HandleShow(pr, user.AccessToken)
-    } else if pr.Metadata.LibrarySectionType == "movie" {
-        HandleMovie(pr, user.AccessToken)
-    }
-    log.Print("Event logged")
+	if pr.Metadata.LibrarySectionType == "show" {
+		HandleShow(pr, user.AccessToken)
+	} else if pr.Metadata.LibrarySectionType == "movie" {
+		HandleMovie(pr, user.AccessToken)
+	}
+	log.Print("Event logged")
 }
 
 // HandleShow start the scrobbling for a show
 func HandleShow(pr plexhooks.PlexResponse, accessToken string) {
-    event, progress := getAction(pr)
+	event, progress := getAction(pr)
 
-    scrobbleObject := ShowScrobbleBody{
-        Progress: progress,
-        Episode:  findEpisode(pr),
-    }
+	if event == "rating" {
+		HandleShowRating(pr, accessToken)
+		event = "stop"
+	}
 
-    scrobbleJSON, err := json.Marshal(scrobbleObject)
-    handleErr(err)
+	if pr.Metadata.Type == "episode" {
+		episode := findEpisode(pr)
+		scrobbleObject := ShowScrobbleBody{
+			Progress: progress,
+			Episode:  episode,
+		}
 
-    scrobbleRequest(event, scrobbleJSON, accessToken)
+		scrobbleJSON, err := json.Marshal(scrobbleObject)
+		handleErr(err)
+		scrobbleRequest(event, scrobbleJSON, accessToken)
+	}
+}
+
+func HandleShowRating(pr plexhooks.PlexResponse, accessToken string) {
+	var ratingObject RatesBody
+	if pr.Metadata.Type == "show" {
+		show := findShow(pr)
+		ratingObject = RatesBody{
+			ShowRateBody: []RateBody{
+				{
+					Rating: pr.Rating,
+					Title:  show.Title,
+					Year:   show.Year,
+					Ids:    show.Ids,
+				},
+			},
+		}
+	} else if pr.Metadata.Type == "episode" {
+		episode := findEpisode(pr)
+		ratingObject = RatesBody{
+			EpisodeRateBody: []RateBody{
+				{
+					Rating: pr.Rating,
+					Title:  episode.Title,
+					Ids:    episode.Ids,
+				},
+			},
+		}
+
+	} else {
+		return
+	}
+
+	ratingObjectJSON, _ := json.Marshal(ratingObject)
+	rateRequest(ratingObjectJSON, accessToken)
 }
 
 // HandleMovie starts the scrobbling for a movie
 func HandleMovie(pr plexhooks.PlexResponse, accessToken string) {
-    event, progress := getAction(pr)
-    movie := findMovie(pr)
+	event, progress := getAction(pr)
+	movie := findMovie(pr)
 
-    if event == "rating" {
-        ratingObject := MovieRates{
-            MovieRateBody: []MovieRateBody{
-                {
-                    Rating: pr.Rating,
-                    Title:  movie.Title,
-                    Year:   movie.Year,
-                    Ids:    movie.Ids,
-                },
-            },
-        }
-        ratingObjectJSON, _ := json.Marshal(ratingObject)
-        rateRequest(event, ratingObjectJSON, accessToken)
-        event = "stop"
-    }
+	if event == "rating" {
+		ratingObject := RatesBody{
+			MovieRateBody: []RateBody{
+				{
+					Rating: pr.Rating,
+					Title:  movie.Title,
+					Year:   movie.Year,
+					Ids:    movie.Ids,
+				},
+			},
+		}
+		ratingObjectJSON, _ := json.Marshal(ratingObject)
+		rateRequest(ratingObjectJSON, accessToken)
+		event = "stop"
+	}
 
-    scrobbleObject := MovieScrobbleBody{
-        Progress: progress,
-        Movie:    movie,
-    }
-    scrobbleJSON, _ := json.Marshal(scrobbleObject)
-    scrobbleRequest(event, scrobbleJSON, accessToken)
+	scrobbleObject := MovieScrobbleBody{
+		Progress: progress,
+		Movie:    movie,
+	}
+	scrobbleJSON, _ := json.Marshal(scrobbleObject)
+	scrobbleRequest(event, scrobbleJSON, accessToken)
+}
+
+func findShow(pr plexhooks.PlexResponse) Show {
+	log.Printf("Finding show for %s (%d)", pr.Metadata.Title, pr.Metadata.Year)
+
+	traktService := pr.Metadata.ExternalGuid[0].Id[:4]
+	showId := pr.Metadata.ExternalGuid[0].Id[7:]
+	mediaType := pr.Metadata.Type
+	url := fmt.Sprintf("https://api.trakt.tv/search/%s/%s?type=%s", traktService, showId, mediaType)
+	respBody := makeRequest(url)
+
+	var results []ShowInfo
+
+	err := json.Unmarshal(respBody, &results)
+	handleErr(err)
+
+	for _, result := range results {
+		if result.Show.Year == pr.Metadata.Year {
+			return result.Show
+		}
+	}
+
+	panic("Could not find show!")
 }
 
 func findEpisode(pr plexhooks.PlexResponse) Episode {
-    var traktService = "tvdb"
-    var showID []string
+	var traktService = "tvdb"
+	var showID []string
 
-    re := regexp.MustCompile("tvdb(?:://|[2-5]?-)(\\d*)/(\\d*)/(\\d*)")
-    showID = re.FindStringSubmatch(pr.Metadata.Guid)
+	re := regexp.MustCompile("tvdb(?:://|[2-5]?-)(\\d*)/(\\d*)/(\\d*)")
+	showID = re.FindStringSubmatch(pr.Metadata.Guid)
 
-    // Retry with TheMovieDB
-    if showID == nil {
-        re := regexp.MustCompile("themoviedb://(\\d*)/(\\d*)/(\\d*)")
-        showID = re.FindStringSubmatch(pr.Metadata.Guid)
-        traktService = "tmdb"
-    }
+	// Retry with TheMovieDB
+	if showID == nil {
+		re := regexp.MustCompile("themoviedb://(\\d*)/(\\d*)/(\\d*)")
+		showID = re.FindStringSubmatch(pr.Metadata.Guid)
+		traktService = "tmdb"
+	}
 
-    // Retry with the new Plex TV agent
-    if showID == nil {
-        var episodeID string
+	// Retry with the new Plex TV agent
+	if showID == nil {
+		var episodeID string
 
-        log.Println("Finding episode with new Plex TV agent")
+		log.Println("Finding episode with new Plex TV agent")
 
-        traktService = pr.Metadata.ExternalGuid[0].Id[:4]
-        episodeID = pr.Metadata.ExternalGuid[0].Id[7:]
+		traktService = pr.Metadata.ExternalGuid[0].Id[:4]
+		episodeID = pr.Metadata.ExternalGuid[0].Id[7:]
 
-        // The new Plex TV agent use episode ID instead of show ID,
-        // so we need to do things a bit differently
-        URL := fmt.Sprintf("https://api.trakt.tv/search/%s/%s?type=episode", traktService, episodeID)
+		// The new Plex TV agent use episode ID instead of show ID,
+		// so we need to do things a bit differently
+		URL := fmt.Sprintf("https://api.trakt.tv/search/%s/%s?type=episode", traktService, episodeID)
 
-        respBody := makeRequest(URL)
+		respBody := makeRequest(URL)
 
-        var showInfo []ShowInfo
-        err := json.Unmarshal(respBody, &showInfo)
-        handleErr(err)
+		var showInfo []ShowInfo
+		err := json.Unmarshal(respBody, &showInfo)
+		handleErr(err)
 
-        log.Print(fmt.Sprintf("Tracking %s - S%02dE%02d using %s", showInfo[0].Show.Title, showInfo[0].Episode.Season, showInfo[0].Episode.Number, traktService))
+		log.Print(fmt.Sprintf("Tracking %s - S%02dE%02d using %s", showInfo[0].Show.Title, showInfo[0].Episode.Season, showInfo[0].Episode.Number, traktService))
 
-        return showInfo[0].Episode
-    }
+		return showInfo[0].Episode
+	}
 
-    url := fmt.Sprintf("https://api.trakt.tv/search/%s/%s?type=show", traktService, showID[1])
+	url := fmt.Sprintf("https://api.trakt.tv/search/%s/%s?type=show", traktService, showID[1])
 
-    log.Print(fmt.Sprintf("Finding show for %s %s %s using %s", showID[1], showID[2], showID[3], traktService))
+	log.Print(fmt.Sprintf("Finding show for %s %s %s using %s", showID[1], showID[2], showID[3], traktService))
 
-    respBody := makeRequest(url)
+	respBody := makeRequest(url)
 
-    var showInfo []ShowInfo
-    err := json.Unmarshal(respBody, &showInfo)
-    handleErr(err)
+	var showInfo []ShowInfo
+	err := json.Unmarshal(respBody, &showInfo)
+	handleErr(err)
 
-    url = fmt.Sprintf("https://api.trakt.tv/shows/%d/seasons?extended=episodes", showInfo[0].Show.Ids.Trakt)
+	url = fmt.Sprintf("https://api.trakt.tv/shows/%d/seasons?extended=episodes", showInfo[0].Show.Ids.Trakt)
 
-    respBody = makeRequest(url)
-    var seasons []Season
-    err = json.Unmarshal(respBody, &seasons)
-    handleErr(err)
+	respBody = makeRequest(url)
+	var seasons []Season
+	err = json.Unmarshal(respBody, &seasons)
+	handleErr(err)
 
-    for _, season := range seasons {
-        if fmt.Sprintf("%d", season.Number) == showID[2] {
-            for _, episode := range season.Episodes {
-                if fmt.Sprintf("%d", episode.Number) == showID[3] {
-                    return episode
-                }
-            }
-        }
-    }
+	for _, season := range seasons {
+		if fmt.Sprintf("%d", season.Number) == showID[2] {
+			for _, episode := range season.Episodes {
+				if fmt.Sprintf("%d", episode.Number) == showID[3] {
+					return episode
+				}
+			}
+		}
+	}
 
-    panic("Could not find episode!")
+	panic("Could not find episode!")
 }
 
 func findMovie(pr plexhooks.PlexResponse) Movie {
-    log.Printf("Finding movie for %s (%d)", pr.Metadata.Title, pr.Metadata.Year)
-    
-    url := fmt.Sprintf("https://api.trakt.tv/search/movie?query=%s", url.PathEscape(pr.Metadata.Title))
-    respBody := makeRequest(url)
-    
-    var results []MovieSearchResult
-    err := json.Unmarshal(respBody, &results)
-    handleErr(err)
-    
-    for _, result := range results {
-        if result.Movie.Year == pr.Metadata.Year {
-            return result.Movie
-        }
-    }
-    
-    panic("Could not find movie!")
+	log.Printf("Finding movie for %s (%d)", pr.Metadata.Title, pr.Metadata.Year)
+
+	url := fmt.Sprintf("https://api.trakt.tv/search/movie?query=%s", url.PathEscape(pr.Metadata.Title))
+	respBody := makeRequest(url)
+
+	var results []MovieSearchResult
+	err := json.Unmarshal(respBody, &results)
+	handleErr(err)
+
+	for _, result := range results {
+		if result.Movie.Year == pr.Metadata.Year {
+			return result.Movie
+		}
+	}
+
+	panic("Could not find movie!")
 }
 
 func makeRequest(url string) []byte {
-    client := &http.Client{}
+	client := &http.Client{}
 
-    req, err := http.NewRequest("GET", url, nil)
-    handleErr(err)
+	req, err := http.NewRequest("GET", url, nil)
+	handleErr(err)
 
-    req.Header.Add("Content-Type", "application/json")
-    req.Header.Add("trakt-api-version", "2")
-    req.Header.Add("trakt-api-key", config.TraktClientId)
+	req.Header.Add("Content-Type", "application/json")
+	req.Header.Add("trakt-api-version", "2")
+	req.Header.Add("trakt-api-key", config.TraktClientId)
 
-    resp, err := client.Do(req)
-    handleErr(err)
-    defer resp.Body.Close()
+	resp, err := client.Do(req)
+	handleErr(err)
+	defer resp.Body.Close()
 
-    respBody, _ := ioutil.ReadAll(resp.Body)
+	respBody, _ := ioutil.ReadAll(resp.Body)
 
-    return respBody
+	return respBody
 }
 
-func rateRequest(action string, body []byte, accessToken string) []byte {
-    client := &http.Client{}
+func rateRequest(body []byte, accessToken string) []byte {
+	client := &http.Client{}
 
-    url := "https://api.trakt.tv/sync/ratings"
+	url := "https://api.trakt.tv/sync/ratings"
 
-    req, err := http.NewRequest("POST", url, bytes.NewBuffer(body))
-    handleErr(err)
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(body))
+	handleErr(err)
 
-    req.Header.Add("Content-Type", "application/json")
-    req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", accessToken))
-    req.Header.Add("trakt-api-version", "2")
-    req.Header.Add("trakt-api-key", config.TraktClientId)
+	req.Header.Add("Content-Type", "application/json")
+	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Add("trakt-api-version", "2")
+	req.Header.Add("trakt-api-key", config.TraktClientId)
 
-    resp, _ := client.Do(req)
-    defer resp.Body.Close()
+	resp, _ := client.Do(req)
+	defer resp.Body.Close()
 
-    respBody, _ := ioutil.ReadAll(resp.Body)
+	respBody, _ := ioutil.ReadAll(resp.Body)
 
-    return respBody
+	return respBody
 }
 
 func scrobbleRequest(action string, body []byte, accessToken string) []byte {
-    client := &http.Client{}
+	client := &http.Client{}
 
-    url := fmt.Sprintf("https://api.trakt.tv/scrobble/%s", action)
+	url := fmt.Sprintf("https://api.trakt.tv/scrobble/%s", action)
 
-    req, err := http.NewRequest("POST", url, bytes.NewBuffer(body))
-    handleErr(err)
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(body))
+	handleErr(err)
 
-    req.Header.Add("Content-Type", "application/json")
-    req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", accessToken))
-    req.Header.Add("trakt-api-version", "2")
-    req.Header.Add("trakt-api-key", config.TraktClientId)
+	req.Header.Add("Content-Type", "application/json")
+	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Add("trakt-api-version", "2")
+	req.Header.Add("trakt-api-key", config.TraktClientId)
 
-    resp, _ := client.Do(req)
-    defer resp.Body.Close()
+	resp, _ := client.Do(req)
+	defer resp.Body.Close()
 
-    respBody, _ := ioutil.ReadAll(resp.Body)
+	respBody, _ := ioutil.ReadAll(resp.Body)
 
-    return respBody
+	return respBody
 }
 
 func getAction(pr plexhooks.PlexResponse) (string, int) {
-    switch pr.Event {
-    case "media.play":
-        return "start", 0
-    case "media.pause":
-        return "stop", 0
-    case "media.resume":
-        return "start", 0
-    case "media.stop":
-        return "stop", 0
-    case "media.scrobble":
-        return "stop", 90
-    case "media.rate":
-        return "rating", 90
-    }
-    return "", 0
+	switch pr.Event {
+	case "media.play":
+		return "start", 0
+	case "media.pause":
+		return "stop", 0
+	case "media.resume":
+		return "start", 0
+	case "media.stop":
+		return "stop", 0
+	case "media.scrobble":
+		return "stop", 90
+	case "media.rate":
+		return "rating", 90
+	}
+	return "", 0
 }
 
 func handleErr(err error) {
-    if err != nil {
-        panic(err)
-    }
+	if err != nil {
+		panic(err)
+	}
 }
