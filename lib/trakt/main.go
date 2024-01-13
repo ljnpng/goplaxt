@@ -68,33 +68,33 @@ func HandleShow(pr plexhooks.PlexResponse, accessToken string) {
 	scrobbleRequest(event, scrobbleJSON, accessToken)
 }
 
-// HandleMovie start the scrobbling for a movie
+// HandleMovie starts the scrobbling for a movie
 func HandleMovie(pr plexhooks.PlexResponse, accessToken string) {
 	event, progress := getAction(pr)
+	movie := findMovie(pr)
 
 	if event == "rating" {
-		movie := findMovie(pr)
 		ratingObject := MovieRates{
-			MovieRateBody: []MovieRateBody{{
-				Rating: pr.Rating,
-				Title:  movie.Title,
-				Year:   movie.Year,
-				Ids:    movie.Ids,
-			},
+			MovieRateBody: []MovieRateBody{
+				{
+					Rating: pr.Rating,
+					Title:  movie.Title,
+					Year:   movie.Year,
+					Ids:    movie.Ids,
+				},
 			},
 		}
 		ratingObjectJSON, _ := json.Marshal(ratingObject)
-		rateRequest("rating", ratingObjectJSON, accessToken)
-	} else {
-		scrobbleObject := MovieScrobbleBody{
-			Progress: progress,
-			Movie:    findMovie(pr),
-		}
-
-		scrobbleJSON, _ := json.Marshal(scrobbleObject)
-
-		scrobbleRequest(event, scrobbleJSON, accessToken)
+		rateRequest(event, ratingObjectJSON, accessToken)
+		event = "stop"
 	}
+
+	scrobbleObject := MovieScrobbleBody{
+		Progress: progress,
+		Movie:    movie,
+	}
+	scrobbleJSON, _ := json.Marshal(scrobbleObject)
+	scrobbleRequest(event, scrobbleJSON, accessToken)
 }
 
 func findEpisode(pr plexhooks.PlexResponse) Episode {
@@ -258,7 +258,7 @@ func getAction(pr plexhooks.PlexResponse) (string, int) {
 	case "media.scrobble":
 		return "stop", 90
 	case "media.rate":
-		return "rating", 0
+		return "rating", 90
 	}
 	return "", 0
 }
