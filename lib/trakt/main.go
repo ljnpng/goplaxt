@@ -53,59 +53,49 @@ func Handle(pr plexhooks.PlexResponse, user store.User) {
 	log.Print("Event logged")
 }
 
-// HandleShow start the scrobbling for a show
+// HandleShow starts the scrobbling for a show
 func HandleShow(pr plexhooks.PlexResponse, accessToken string) {
 	event, progress := getAction(pr)
 
-	if event == "rating" {
-		HandleShowRating(pr, accessToken)
-		event = "stop"
-	}
-
 	if pr.Metadata.Type == "episode" {
 		episode := findEpisode(pr)
+
+		if event == "rating" {
+			episodeRate := RateBody{
+				Rating: pr.Rating,
+				Title:  episode.Title,
+				Ids:    episode.Ids,
+			}
+			handlerRating(RatesBody{EpisodeRateBody: []RateBody{episodeRate}}, accessToken)
+			event = "stop"
+		}
+
 		scrobbleObject := ShowScrobbleBody{
 			Progress: progress,
 			Episode:  episode,
 		}
-
 		scrobbleJSON, err := json.Marshal(scrobbleObject)
 		handleErr(err)
 		scrobbleRequest(event, scrobbleJSON, accessToken)
+	} else if pr.Metadata.Type == "show" {
+		show := findShow(pr)
+
+		if event == "rating" {
+			showRate := RateBody{
+				Rating: pr.Rating,
+				Title:  show.Title,
+				Year:   show.Year,
+				Ids:    show.Ids,
+			}
+			handlerRating(RatesBody{ShowRateBody: []RateBody{showRate}}, accessToken)
+			event = "stop"
+		}
+
 	}
 }
 
-func HandleShowRating(pr plexhooks.PlexResponse, accessToken string) {
-	var ratingObject RatesBody
-	if pr.Metadata.Type == "show" {
-		show := findShow(pr)
-		ratingObject = RatesBody{
-			ShowRateBody: []RateBody{
-				{
-					Rating: pr.Rating,
-					Title:  show.Title,
-					Year:   show.Year,
-					Ids:    show.Ids,
-				},
-			},
-		}
-	} else if pr.Metadata.Type == "episode" {
-		episode := findEpisode(pr)
-		ratingObject = RatesBody{
-			EpisodeRateBody: []RateBody{
-				{
-					Rating: pr.Rating,
-					Title:  episode.Title,
-					Ids:    episode.Ids,
-				},
-			},
-		}
-
-	} else {
-		return
-	}
-
-	ratingObjectJSON, _ := json.Marshal(ratingObject)
+func handlerRating(ratesbody RatesBody, accessToken string) {
+	ratingObjectJSON, _ := json.Marshal(ratesbody)
 	rateRequest(ratingObjectJSON, accessToken)
 }
 
@@ -127,7 +117,7 @@ func HandleMovie(pr plexhooks.PlexResponse, accessToken string) {
 		}
 		ratingObjectJSON, _ := json.Marshal(ratingObject)
 		rateRequest(ratingObjectJSON, accessToken)
-		event = "stop"
+		event = "stop" // reset the event, so we can scrobble again
 	}
 
 	scrobbleObject := MovieScrobbleBody{

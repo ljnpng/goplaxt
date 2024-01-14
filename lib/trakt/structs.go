@@ -13,7 +13,7 @@ type Ids struct {
 type Show struct {
 	Title string `json:"title"`
 	Year  int    `json:"year"`
-	Ids   Ids
+	Ids   Ids	 
 }
 
 // ShowInfo represent a show
@@ -45,11 +45,11 @@ type Movie struct {
 
 // MovieSearchResult represent a search result for a movie
 type MovieSearchResult struct {
-	Movie Movie
+	Movie Movie `json:"movie"`
 }
 
 type ShowSearchResult struct {
-	Show Show
+	Show Show  `json:"show"`
 }
 
 // ShowScrobbleBody represent the scrobbling status for a show
